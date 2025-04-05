@@ -18,7 +18,7 @@ while(game.currentQuestionIndex < game.questions.length){
 console.log(getCurrentQuestion(game.id))
 let result = submitAnswer(game.id, player1.id, 'Paris', 5); // Answer and time taken in seconds
 console.log('Player 1 Answer Result:', result);
-result = submitAnswer(game.id,player2.id, 'Shakespeare', 4); // Answer and time taken in seconds
+result = submitAnswer(game.id,player2.id, 'penis', 4); // Answer and time taken in seconds
 console.log('Player 2 Answer Result:', result);
 console.log( game.currentQuestionIndex)}
 console.log(players)

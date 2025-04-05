@@ -23,6 +23,7 @@ const {
   getGame,
   getCurrentQuestion,
   submitAnswer,
+  evaluateAnswer,
 } = require('./models/game');
 const { createPlayer } = require('./models/player');
 
@@ -68,6 +69,23 @@ app.post('/game/:gameId/answer', async (req, res) => {
     res.status(500).json({ error: 'Failed to submit answer' });
   }
 });
+
+//Evaluate and answer
+app.post('/evaluate', async (req, res) => {
+    const { question, answer, sampleSolution } = req.body;
+  
+    if (!question || !answer || !sampleSolution) {
+      return res.status(400).json({ error: 'Question, answer or sample solution is missing!' });
+    }
+  
+    try {
+      const score = await evaluateAnswer(question, answer, sampleSolution);
+      res.json({ score });
+    } catch (error) {
+      console.error('Evaluation error:', error);
+      res.status(500).json({ error: 'Failed to evaluate answer.' });
+    }
+  });
 
 app.listen(port, () => {
   console.log(`Game server running on http://localhost:${port}`);
