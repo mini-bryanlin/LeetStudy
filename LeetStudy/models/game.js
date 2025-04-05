@@ -53,6 +53,7 @@ const createGame = (topic, difficulty,username) =>{
     return null;
 
   };
+ 
 const submitAnswer = (gameId, playerId, answer, timeTaken) => {
     const game = getGame(gameId);
     const player = getPlayerById(playerId)
@@ -77,7 +78,7 @@ const nextQuestion = (gameId) =>{
     if (game.answers.length % game.players.length === 0 ){
         game.currentQuestionIndex += 1;
     }    
-}
+};
 
 module.exports = {
     createGame,
@@ -86,5 +87,5 @@ module.exports = {
     getCurrentQuestion,
     generateQuestions,
     submitAnswer,
-    nextQuestion
-};
+    nextQuestion,
+}

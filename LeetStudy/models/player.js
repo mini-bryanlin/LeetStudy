@@ -45,8 +45,7 @@ module.exports = {
         createPlayer,
         getPlayerById,
         setPlayerGame,
-        submitPlayerAnswer,
-        nextQuestion,
+        
         addHistory,
         addPoints
       };
