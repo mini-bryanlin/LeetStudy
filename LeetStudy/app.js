@@ -1,17 +1,74 @@
+// const express = require('express');
+// const bodyParser = require('body-parser');
+// const gameRoutes = require('./routes/gameRoutes');
+// // const playerRoutes = require('./routes/playerRoutes');
+
+// const app = express();
+// const PORT = process.env.PORT || 3000;
+
+// app.use(bodyParser.json());  // Parse incoming JSON requests
+
+// // API Routes
+// app.use('/api/games', gameRoutes);
+// // app.use('/api/players', playerRoutes);
+
+// app.listen(PORT, () => {
+//     console.log(`Server is running on port ${PORT}`);
+// });
 const express = require('express');
 const bodyParser = require('body-parser');
-const gameRoutes = require('./routes/gameRoutes');
-// const playerRoutes = require('./routes/playerRoutes');
+const {
+  createGame,
+  addPlayerToGame,
+  getGame,
+  getCurrentQuestion,
+  submitAnswer,
+} = require('./models/game');
+const { createPlayer } = require('./models/player');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = 3000;
 
-app.use(bodyParser.json());  // Parse incoming JSON requests
+app.use(bodyParser.json());
 
-// API Routes
-app.use('/api/games', gameRoutes);
-// app.use('/api/players', playerRoutes);
+// Create a new player
+app.post('/player', (req, res) => {
+  const { username, ownership } = req.body;
+  const player = createPlayer(username, ownership);
+  res.json(player);
+});
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+// Create a new game
+app.post('/game', async (req, res) => {
+  const { topic, difficulty, username } = req.body;
+  const game = createGame(topic, difficulty, username);
+  res.json(game);
+});
+
+// Join a game
+app.post('/game/:gameId/join', (req, res) => {
+  const { playerId } = req.body;
+  const result = addPlayerToGame(req.params.gameId, playerId);
+  res.json({ message: result });
+});
+
+// Get current question
+app.get('/game/:gameId/question', (req, res) => {
+  const question = getCurrentQuestion(req.params.gameId);
+  res.json(question);
+});
+
+// Submit an answer
+app.post('/game/:gameId/answer', async (req, res) => {
+  const { playerId, answer, timeTaken } = req.body;
+  try {
+    await submitAnswer(req.params.gameId, playerId, answer, timeTaken);
+    res.json({ message: 'Answer submitted' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to submit answer' });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`Game server running on http://localhost:${port}`);
 });
