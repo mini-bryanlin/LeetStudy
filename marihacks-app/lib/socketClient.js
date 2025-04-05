@@ -15,8 +15,29 @@ let connectPromise = null;
 // Track users who have joined rooms
 const joinedUsers = new Map(); // roomId -> Set of userIds
 
+// Track last join attempt time for throttling
+const lastJoinAttempts = new Map(); // roomId-userId -> timestamp
+
 // Debug level - set to true to see debug messages
 const DEBUG = true;
+
+// Throttle period for join requests (5 seconds)
+const JOIN_THROTTLE_PERIOD = 5000;
+
+// Avoid duplicate join requests by checking timestamps
+function shouldThrottleJoin(roomId, userId) {
+  const key = `${roomId}-${userId}`;
+  const now = Date.now();
+  const lastAttempt = lastJoinAttempts.get(key) || 0;
+  
+  if (now - lastAttempt < JOIN_THROTTLE_PERIOD) {
+    debugLog(`Throttling join request for ${userId} to room ${roomId} - too frequent`);
+    return true;
+  }
+  
+  lastJoinAttempts.set(key, now);
+  return false;
+}
 
 function debugLog(...args) {
   if (DEBUG) {
@@ -24,70 +45,59 @@ function debugLog(...args) {
   }
 }
 
-// Determine the socket URL based on environment
-const getSocketUrl = () => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  if (isProduction) {
-    return window.location.origin;
+// Initialize the socket connection
+export function initializeSocket() {
+  // Return the existing socket if already initialized
+  if (socketInitialized && globalSocket) {
+    debugLog('Socket already initialized');
+    return Promise.resolve(globalSocket);
   }
   
-  // For development use, connect to the separate socket server on port 3030
-  return window.location.hostname === 'localhost'
-    ? `http://${window.location.hostname}:3030`
-    : window.location.origin;
-};
+  // Only create one promise for connection
+  if (connectPromise) {
+    return connectPromise;
+  }
 
-// Initialize the global socket with stable connection handling
-const initializeSocket = () => {
-  if (socketInitialized) return globalSocket;
-  
-  if (!connectPromise) {
-    connectPromise = new Promise((resolve) => {
-      console.log('Creating new global socket connection');
-      
-      globalSocket = io(getSocketUrl(), {
-        transports: ['websocket'],
-        autoConnect: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 2000,
-        reconnectionDelayMax: 10000,
-        timeout: 20000
-      });
-      
-      const onConnect = () => {
-        console.log('Socket connected globally:', globalSocket.id);
-        socketInitialized = true;
-        resolve(globalSocket);
-        
-        // Rejoin any rooms we were in before disconnect
-        connectedRooms.forEach((data, roomId) => {
-          if (Date.now() - data.timestamp < 300000) { // Only rejoin rooms joined in the last 5 minutes
-            console.log(`Auto-rejoining room ${roomId} after reconnect`);
-            globalSocket.emit('join_room', { roomId, user: data.user });
-          } else {
-            connectedRooms.delete(roomId);
-          }
-        });
-      };
-      
-      globalSocket.on('connect', onConnect);
-      
-      if (globalSocket.connected) {
-        onConnect();
-      }
-      
-      globalSocket.on('disconnect', () => {
-        console.log('Socket disconnected globally');
-      });
-      
-      globalSocket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-      });
+  // Create a new promise for the connection
+  connectPromise = new Promise((resolve) => {
+    const serverUrl = process.env.NODE_ENV === 'production' 
+      ? window.location.origin 
+      : 'http://localhost:3031'; // Use port 3031 to match the socket server port
+
+    debugLog('Initializing socket connection to', serverUrl);
+    
+    globalSocket = io(serverUrl, {
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     });
-  }
+
+    globalSocket.on('connect', () => {
+      debugLog('Socket connected with ID:', globalSocket.id);
+      socketInitialized = true;
+      resolve(globalSocket);
+    });
+
+    globalSocket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err.message);
+      // Still resolve with the socket so the UI can handle the error state
+      resolve(globalSocket);
+    });
+
+    globalSocket.on('error', (err) => {
+      console.error('Socket error:', err);
+    });
+    
+    // If the socket is already connected, resolve immediately
+    if (globalSocket.connected) {
+      socketInitialized = true;
+      resolve(globalSocket);
+    }
+  });
   
   return connectPromise;
-};
+}
 
 // Simple debounce function to prevent rapid repeated calls
 function debounce(func, wait) {
@@ -159,6 +169,8 @@ export function useSocketRoom(roomId, user) {
   const { socket, connected } = useSocket();
   const [roomUsers, setRoomUsers] = useState([]);
   const [roomProgress, setRoomProgress] = useState([]);
+  const [textAnswers, setTextAnswers] = useState({});
+  const [roomOwner, setRoomOwner] = useState(null);
   const [error, setError] = useState(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
@@ -185,9 +197,8 @@ export function useSocketRoom(roomId, user) {
   
   // Setup event listeners only once
   useEffect(() => {
-    if (!socket || !roomId || !user || !user.id) {
+    if (!roomId || !user || !user.id) {
       console.log("Missing required data for socket room:", { 
-        socket: !!socket, 
         roomId, 
         userId: user?.id 
       });
@@ -196,105 +207,171 @@ export function useSocketRoom(roomId, user) {
     
     // Initialize the socket if it hasn't been yet
     if (!socketInitialized) {
-      initializeSocket();
-      return; // Wait for next render when socket is initialized
+      const setupSocketWithRetry = async () => {
+        try {
+          const initializedSocket = await initializeSocket();
+          if (initializedSocket) {
+            setupRoomEvents(initializedSocket);
+          }
+        } catch (error) {
+          console.error("Failed to initialize socket:", error);
+          setError("Failed to connect to socket server");
+        }
+      };
+      
+      setupSocketWithRetry();
+      return;
     }
     
-    console.log(`Setting up socket room for ${roomId} with user ${user.id}`);
-    
-    // Check if this user is already in this room's joined users set
-    if (!joinedUsers.has(roomId)) {
-      joinedUsers.set(roomId, new Set());
+    // If socket is already initialized, set up events
+    if (socket) {
+      // Clean up previous event handlers first
+      cleanupSocketEvents(socket);
+      setupRoomEvents(socket);
     }
     
-    const roomJoinedUsers = joinedUsers.get(roomId);
-    const alreadyJoined = roomJoinedUsers.has(user.id);
+    // Clean up socket event handlers
+    function cleanupSocketEvents(socketInstance) {
+      // Define stable event handler references to properly remove them
+      const stableHandlers = {
+        roomUsersUpdated: (data) => handleRoomUsersUpdated(data),
+        roomProgressUpdated: (data) => handleRoomProgressUpdated(data),
+        textAnswersUpdated: (data) => handleTextAnswersUpdated(data),
+        reconnect: () => handleReconnect()
+      };
+      
+      socketInstance.off('room_users_updated');
+      socketInstance.off('room_progress_updated');
+      socketInstance.off('text_answers_updated');
+      socketInstance.off('connect');
+      
+      debugLog(`Cleaned up previous socket event listeners for room ${roomId}`);
+    }
     
-    // Create a stable event handler that won't recreate on component rerenders
-    const handleRoomUsersUpdated = (data) => {
-      if (data?.users && Array.isArray(data.users)) {
-        console.log(`Received room_users_updated with ${data.users.length} users:`, 
-          data.users.map(u => u.username));
-        dataRef.current.roomUsers = data.users;
+    function setupRoomEvents(socketInstance) {
+      debugLog(`Setting up socket room for ${roomId} with user ${user.id}`);
+      
+      // Check if this user is already in this room's joined users set
+      if (!joinedUsers.has(roomId)) {
+        joinedUsers.set(roomId, new Set());
+      }
+      
+      const roomJoinedUsers = joinedUsers.get(roomId);
+      const alreadyJoined = roomJoinedUsers.has(user.id);
+      
+      // Create stable event handler that won't recreate on component rerenders
+      function handleRoomUsersUpdated(data) {
+        if (Array.isArray(data)) {
+          console.log(`Received room_users_updated with ${data.length} users:`, 
+            data.map(u => u.username));
+          dataRef.current.roomUsers = data;
+          
+          // Check for room owner
+          const owner = data.find(u => u.isOwner);
+          if (owner) {
+            setRoomOwner(owner.id);
+          }
+          
+          // Force a full state update to ensure render
+          setRoomUsers([...data]);
+        } else {
+          console.log(`Received invalid room_users_updated:`, data);
+        }
+      }
+      
+      function handleRoomProgressUpdated(data) {
+        console.log(`Received room_progress_updated for room ${dataRef.current.roomId}:`, data);
+        if (Array.isArray(data)) {
+          console.log(`Progress data is an array with ${data.length} items`);
+          dataRef.current.roomProgress = data;
+          setRoomProgress([...data]);
+        } else if (data?.progress && Array.isArray(data.progress)) {
+          console.log(`Progress data has progress array with ${data.progress.length} items`);
+          dataRef.current.roomProgress = data.progress;
+          setRoomProgress([...data.progress]);
+        } else {
+          console.log(`Received invalid room_progress_updated data:`, data);
+        }
+      }
+      
+      function handleTextAnswersUpdated(data) {
+        if (data && typeof data === 'object') {
+          console.log(`Received text_answers_updated:`, data);
+          setTextAnswers(data);
+        }
+      }
+      
+      // Join the room if not already joined
+      if ((!alreadyJoined || Date.now() - dataRef.current.joinTimestamp > 60000) && socketInstance.connected) {
+        // Add throttling check
+        if (shouldThrottleJoin(roomId, user.id)) {
+          console.log(`Join request throttled for ${user.username} (${user.id}) to room ${roomId}`);
+        } else {
+          console.log(`Joining room ${roomId} as ${user.username} (${user.id})`);
+          
+          socketInstance.emit('join_room', { roomId, username: user.username });
+          roomJoinedUsers.add(user.id);
+          
+          // Store the join info for reconnection
+          connectedRooms.set(roomId, { 
+            user, 
+            timestamp: Date.now() 
+          });
+          
+          // Update join timestamp
+          dataRef.current.joinTimestamp = Date.now();
+        }
+      } 
+      
+      // First remove any existing handlers to prevent duplicates
+      cleanupSocketEvents(socketInstance);
+      
+      // Attach event handlers
+      socketInstance.on('room_users_updated', handleRoomUsersUpdated);
+      socketInstance.on('room_progress_updated', handleRoomProgressUpdated);
+      socketInstance.on('text_answers_updated', handleTextAnswersUpdated);
+      
+      // Auto-rejoin on reconnect
+      function handleReconnect() {
+        console.log(`Reconnected, rejoining room ${roomId}`);
         
-        // Force a full state update to ensure render
-        setRoomUsers([...data.users]);
-      } else {
-        console.log(`Received invalid room_users_updated:`, data);
+        // Add throttling check for reconnect too
+        if (shouldThrottleJoin(roomId, user.id)) {
+          console.log(`Reconnection join request throttled for ${user.username} (${user.id})`);
+          return; // Skip this join attempt
+        }
+        
+        socketInstance.emit('join_room', { roomId, username: user.username });
+        
+        // Update the join timestamp
+        if (connectedRooms.has(roomId)) {
+          connectedRooms.set(roomId, {
+            user,
+            timestamp: Date.now()
+          });
+        }
+        
+        // Update join timestamp in ref
+        dataRef.current.joinTimestamp = Date.now();
+        
+        setReconnecting(false);
       }
-    };
-    
-    const handleRoomProgressUpdated = (data) => {
-      if (data?.progress && Array.isArray(data.progress)) {
-        console.log(`Received room_progress_updated with ${data.progress.length} items`);
-        dataRef.current.roomProgress = data.progress;
-        setRoomProgress([...data.progress]);
-      } else {
-        console.log(`Received invalid room_progress_updated:`, data);
-      }
-    };
-    
-    // Join the room if not already joined
-    if (!alreadyJoined && socket.connected) {
-      console.log(`Joining room ${roomId} as ${user.username} (${user.id})`);
-      socket.emit('join_room', { roomId, user });
-      roomJoinedUsers.add(user.id);
       
-      // Store the join info for reconnection
-      connectedRooms.set(roomId, { 
-        user, 
-        timestamp: Date.now() 
-      });
-    } else {
-      console.log(`Already joined room ${roomId} or socket not connected, reconnecting`);
-      // Try to rejoin to get latest state
-      socket.emit('join_room', { roomId, user });
+      socketInstance.on('connect', handleReconnect);
+      
+      return () => {
+        cleanupSocketEvents(socketInstance);
+      };
     }
     
-    // First removal of existing handlers to prevent duplicates
-    socket.off('room_users_updated', handleRoomUsersUpdated);
-    socket.off('room_progress_updated', handleRoomProgressUpdated);
-    
-    // Attach event handlers
-    socket.on('room_users_updated', handleRoomUsersUpdated);
-    socket.on('room_progress_updated', handleRoomProgressUpdated);
-    
-    // Auto-rejoin on reconnect
-    const handleReconnect = () => {
-      console.log(`Reconnected, rejoining room ${roomId}`);
-      socket.emit('join_room', { roomId, user });
-      
-      // Update the join timestamp
-      if (connectedRooms.has(roomId)) {
-        connectedRooms.set(roomId, {
-          user,
-          timestamp: Date.now()
-        });
-      }
-    };
-    
-    socket.on('connect', handleReconnect);
-    
-    // Check for existing room users data and request an update if needed
-    if ((!roomUsers || roomUsers.length === 0) && socket.connected) {
-      // Request a refresh of room data
-      console.log(`Requesting room data refresh for ${roomId}`);
-      socket.emit('join_room', { roomId, user });
-    }
-    
-    dataRef.current.isSetup = true;
-    
-    // Cleanup function
+    // Clean up event listeners when component unmounts
     return () => {
-      console.log(`Cleaning up event handlers for room ${roomId}`);
-      socket.off('room_users_updated', handleRoomUsersUpdated);
-      socket.off('room_progress_updated', handleRoomProgressUpdated);
-      socket.off('connect', handleReconnect);
-      
-      // Don't leave the room on unmount to ensure persistent connection
-      // The server will handle timeouts and cleanup
+      console.log(`Component unmounting, cleaning up socket event listeners for room ${roomId}`);
+      if (socket) {
+        cleanupSocketEvents(socket);
+      }
     };
-  }, [socket, roomId, user?.id, roomUsers?.length]); // Add roomUsers.length to handle empty state
+  }, [roomId, user, socket, connected]);
   
   // Debounced event emitters that use refs for current data
   const sendAnswerEvent = useCallback(
@@ -323,10 +400,45 @@ export function useSocketRoom(roomId, user) {
     [socket]
   );
   
+  // Function to submit a text answer
+  const submitTextAnswer = useCallback(
+    debounce((answer, questionIndex) => {
+      if (socket && socket.connected && dataRef.current.roomId) {
+        socket.emit('submit_text_answer', { 
+          roomId: dataRef.current.roomId, 
+          answer,
+          questionIndex
+        });
+      }
+    }, 300),
+    [socket]
+  );
+  
+  // Function to skip the current question (owner only)
+  const skipQuestion = useCallback(
+    debounce(() => {
+      if (socket && socket.connected && dataRef.current.roomId) {
+        socket.emit('skip_question', { 
+          roomId: dataRef.current.roomId
+        });
+      }
+    }, 300),
+    [socket]
+  );
+  
   return {
     roomUsers,
     roomProgress,
+    textAnswers,
+    roomOwner,
+    isOwner: user?.id === roomOwner,
     sendAnswerEvent,
-    sendQuizCompletedEvent
+    sendQuizCompletedEvent,
+    submitTextAnswer,
+    skipQuestion,
+    socket,
+    reconnecting,
+    reconnectAttempts,
+    error
   };
 } 

@@ -65,6 +65,11 @@ const Header = () => {
               </Link>
             </li>
             <li>
+              <Link href="/leetstudy" className="hover:text-yellow-300 transition-colors px-2 py-1 rounded-full hover:bg-emerald-600">
+                🧠 LeetStudy
+              </Link>
+            </li>
+            <li>
               <Link 
                 href={user ? "/play" : "/auth/login"} 
                 className="bg-yellow-400 hover:bg-yellow-500 text-emerald-800 font-bold px-3 py-1 rounded-full transition-colors flex items-center"

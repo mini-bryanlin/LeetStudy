@@ -65,10 +65,13 @@ const io = new Server(server, {
 // Helper function to get a room or create it if it doesn't exist
 function getOrCreateRoom(roomId) {
   if (!rooms.has(roomId)) {
-    debugLog(`Creating new room: ${roomId}`);
+    console.log(`Creating new room: ${roomId}`);
     rooms.set(roomId, {
-      users: new Map(), // userId -> { username, joinTime, socketIds: Set }
+      users: new Map(), // userId -> { username, joinTime, socketIds: Set, isOwner }
       progress: new Map(), // userId -> progress data
+      textAnswers: new Map(), // questionIndex -> { userId: answer }
+      currentQuestion: 0, // Current question index
+      skippedQuestions: new Set(), // Set of questionIndexes that were skipped
     });
   }
   return rooms.get(roomId);
@@ -130,6 +133,7 @@ function getRoomUsers(roomId) {
       id: userId,
       username: userInfo.username,
       joinTime: userInfo.joinTime,
+      isOwner: userInfo.isOwner || false
     });
   }
   
@@ -201,6 +205,35 @@ function sendRoomProgressToSocket(socketId, roomId) {
   io.to(socketId).emit('room_progress_updated', progress);
 }
 
+// Helper function to get text answers for a room and question
+function getRoomTextAnswers(roomId, questionIndex) {
+  if (!rooms.has(roomId)) return {};
+  
+  const room = rooms.get(roomId);
+  const allAnswers = {};
+  
+  // If we don't have this question's answers tracked, return empty
+  if (!room.textAnswers.has(questionIndex)) {
+    return allAnswers;
+  }
+  
+  const answers = room.textAnswers.get(questionIndex);
+  for (const [userId, answer] of Object.entries(answers)) {
+    allAnswers[userId] = answer;
+  }
+  
+  return allAnswers;
+}
+
+// Helper function to send text answers to a room
+function sendRoomTextAnswersToRoom(roomId, questionIndex) {
+  if (!rooms.has(roomId)) return;
+  
+  const answers = getRoomTextAnswers(roomId, questionIndex);
+  console.log(`Sending text answers for question ${questionIndex} to room ${roomId}`);
+  io.to(roomId).emit('text_answers_updated', answers);
+}
+
 // Helper function to send room updates to a socket (both users and progress)
 function sendRoomUpdatesToSocket(socket, roomId) {
   const socketId = typeof socket === 'string' ? socket : socket.id;
@@ -218,12 +251,27 @@ io.on('connection', (socket) => {
     roomIds: new Set()
   });
   
+  // Track recent joins to prevent spam
+  const recentJoins = new Map();
+  
   // Handle joining a room
   socket.on('join_room', ({ roomId, username }) => {
     if (!roomId || !username) {
       console.log(`Invalid join request from socket ${socket.id}: missing roomId or username`);
       return;
     }
+    
+    // Prevent rapid rejoins
+    const joinKey = `${socket.id}:${roomId}`;
+    const now = Date.now();
+    const lastJoinTime = recentJoins.get(joinKey) || 0;
+    
+    if (now - lastJoinTime < 5000) { // 5 second debounce
+      console.log(`Ignoring rapid rejoin from socket ${socket.id} to room ${roomId}`);
+      return;
+    }
+    
+    recentJoins.set(joinKey, now);
     
     // Generate a unique ID for the user if they don't have one
     let userId = null;
@@ -244,7 +292,12 @@ io.on('connection', (socket) => {
     if (room.users.has(userId)) {
       const userInfo = room.users.get(userId);
       
-      console.log(`User ${username} (${userId}) is already in room ${roomId}`);
+      // Only log the first time or after significant delay
+      const lastLog = recentEvents.get(`join:${roomId}:${userId}`) || 0;
+      if (now - lastLog > JOIN_DEBOUNCE_TIME) {
+        console.log(`User ${username} (${userId}) is already in room ${roomId}`);
+        recentEvents.set(`join:${roomId}:${userId}`, now);
+      }
       
       // Update username in case it changed
       userInfo.username = username;
@@ -272,13 +325,21 @@ io.on('connection', (socket) => {
     }
     
     // If this is a new user joining the room
-    console.log(`User ${username} (${userId}) joining room ${roomId}`);
+    console.log(`User ${username} (${userId}) joining room ${roomId}, Room size: ${room.users.size}`);
+    recentEvents.set(`join:${roomId}:${userId}`, now);
+    
+    // First user becomes the owner
+    const isOwner = room.users.size === 0;
+    if (isOwner) {
+      console.log(`User ${username} (${userId}) is now the owner of room ${roomId}`);
+    }
     
     // Add user to room with this socket
     room.users.set(userId, {
       username,
       joinTime: Date.now(),
-      socketIds: new Set([socket.id])
+      socketIds: new Set([socket.id]),
+      isOwner
     });
     
     // Update user-socket mappings
@@ -387,6 +448,88 @@ io.on('connection', (socket) => {
     sendRoomProgressToRoom(roomId);
   });
   
+  // Handle submitting a text answer
+  socket.on('submit_text_answer', ({ roomId, answer, questionIndex }) => {
+    if (!roomId || answer === undefined || questionIndex === undefined) return;
+    
+    const socketInfo = socketConnections.get(socket.id);
+    if (!socketInfo || !socketInfo.userId) return;
+    
+    const { userId } = socketInfo;
+    
+    // Check if the room exists
+    if (!rooms.has(roomId)) return;
+    
+    // Check if the user is in the room
+    const room = rooms.get(roomId);
+    if (!room.users.has(userId)) return;
+    
+    // Initialize answers map for this question if it doesn't exist
+    if (!room.textAnswers.has(questionIndex)) {
+      room.textAnswers.set(questionIndex, {});
+    }
+    
+    // Store the answer
+    const answers = room.textAnswers.get(questionIndex);
+    answers[userId] = answer;
+    
+    console.log(`User ${userId} submitted answer for question ${questionIndex} in room ${roomId}`);
+    
+    // Send updated answers to all users in the room
+    sendRoomTextAnswersToRoom(roomId, questionIndex);
+    
+    // Check if all users have answered
+    const answeredCount = Object.keys(answers).length;
+    const userCount = room.users.size;
+    
+    if (answeredCount >= userCount) {
+      console.log(`All users (${userCount}/${userCount}) have answered question ${questionIndex} in room ${roomId}`);
+      io.to(roomId).emit('all_answers_submitted', { 
+        questionIndex,
+        answers
+      });
+    } else {
+      console.log(`${answeredCount}/${userCount} users have answered question ${questionIndex} in room ${roomId}`);
+    }
+  });
+  
+  // Handle skipping a question (only owner can do this)
+  socket.on('skip_question', ({ roomId, questionIndex }) => {
+    if (!roomId) return;
+    
+    const socketInfo = socketConnections.get(socket.id);
+    if (!socketInfo || !socketInfo.userId) return;
+    
+    const { userId } = socketInfo;
+    
+    // Check if the room exists
+    if (!rooms.has(roomId)) return;
+    
+    // Check if the user is in the room and is the owner
+    const room = rooms.get(roomId);
+    if (!room.users.has(userId)) return;
+    
+    const userInfo = room.users.get(userId);
+    if (!userInfo.isOwner) {
+      console.log(`User ${userId} tried to skip question but is not the owner of room ${roomId}`);
+      return;
+    }
+    
+    // Mark question as skipped
+    if (questionIndex !== undefined) {
+      room.skippedQuestions.add(questionIndex);
+    } else if (room.currentQuestion !== undefined) {
+      room.skippedQuestions.add(room.currentQuestion);
+    }
+    
+    console.log(`Question ${questionIndex || room.currentQuestion} skipped in room ${roomId} by owner ${userId}`);
+    
+    // Notify all users in the room
+    io.to(roomId).emit('question_skipped', { 
+      questionIndex: questionIndex || room.currentQuestion
+    });
+  });
+  
   // Handle disconnection
   socket.on('disconnect', () => {
     debugLog(`Socket disconnected: ${socket.id}`);
@@ -444,8 +587,8 @@ io.on('connection', (socket) => {
 });
 
 // Start the server
-const PORT = process.env.PORT || 3001;
+const PORT = 3031;
 server.listen(PORT, () => {
   console.log('===== SOCKET.IO SERVER RESTARTED =====');
-  console.log(`Listening for connections on port ${PORT}...`);
+  console.log(`Socket.io server running on port ${PORT}`);
 }); 

@@ -5,14 +5,18 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useSocketRoom } from "@/lib/socketClient";
 import Link from "next/link";
-import { FaStar, FaTrophy, FaArrowRight, FaArrowLeft, FaBug, FaCheck, FaTimes } from "react-icons/fa";
+import { FaStar, FaTrophy, FaArrowRight, FaArrowLeft, FaBug, FaCheck, FaTimes, FaUserFriends, FaCrown } from "react-icons/fa";
 import TeamRoomProgress from "@/components/TeamRoomProgress";
+import { Socket } from "socket.io-client";
 
 // Define proper interfaces for your data types
 interface Question {
   question: string;
   options: string[];
   correctAnswer: number;
+  type?: "multiple_choice" | "text";
+  textAnswer?: string;
+  subject?: string; // Added for displaying subject
 }
 
 interface Room {
@@ -25,6 +29,14 @@ interface Room {
   createdBy: string;
   createdAt: Date;
   users?: any[];
+}
+
+// Add proper interface for a room user
+interface RoomUser {
+  id: string;
+  username: string;
+  joinTime?: number;
+  isOwner?: boolean;
 }
 
 export default function ClientRoom({ params }: { params: { roomId: string } }) {
@@ -45,6 +57,11 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
   const [error, setError] = useState("");
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
+  const [textAnswers, setTextAnswers] = useState<{ [key: string]: string }>({});
+  const [myTextAnswer, setMyTextAnswer] = useState<string>("");
+  const [hasSubmittedAnswer, setHasSubmittedAnswer] = useState<boolean>(false);
+  const [allAnswersSubmitted, setAllAnswersSubmitted] = useState<boolean>(false);
+  const [answerScores, setAnswerScores] = useState<{ [key: string]: number }>({});
   const [score, setScore] = useState(0);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
@@ -53,8 +70,23 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
   const router = useRouter();
   const { user, loading: authLoading, updateUserScore } = useAuth();
   
-  // Socket integration for team features
-  const { roomUsers, roomProgress, sendAnswerEvent, sendQuizCompletedEvent } = useSocketRoom(
+  // Update the component state initialization
+  const [socket, setSocket] = useState<any>(null);
+  const [localRoomUsers, setLocalRoomUsers] = useState<RoomUser[]>([]);
+  
+  // Update the useSocketRoom hook call
+  const { 
+    roomUsers: socketRoomUsers, 
+    roomProgress, 
+    textAnswers: roomTextAnswers, 
+    roomOwner,
+    isOwner,
+    sendAnswerEvent, 
+    sendQuizCompletedEvent,
+    submitTextAnswer,
+    skipQuestion,
+    socket: socketInstance
+  } = useSocketRoom(
     roomId,
     user ? {
       id: user.id,
@@ -62,6 +94,17 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
       avatar: user.avatar
     } : null
   );
+  
+  // Update socket reference and room users when they're available
+  useEffect(() => {
+    if (socketInstance) {
+      setSocket(socketInstance);
+    }
+    
+    if (socketRoomUsers && Array.isArray(socketRoomUsers) && socketRoomUsers.length > 0) {
+      setLocalRoomUsers(socketRoomUsers as RoomUser[]);
+    }
+  }, [socketInstance, socketRoomUsers]);
   
   // Fetch room data
   useEffect(() => {
@@ -118,6 +161,90 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
     }
   }, [roomId, user, authLoading, router]);
   
+  // Update local state when room text answers change
+  useEffect(() => {
+    if (roomTextAnswers && Object.keys(roomTextAnswers).length > 0) {
+      setTextAnswers(roomTextAnswers);
+      
+      // Check if current user has submitted an answer
+      if (user?.id && roomTextAnswers && typeof roomTextAnswers === 'object' && user.id in roomTextAnswers) {
+        setHasSubmittedAnswer(true);
+      }
+      
+      // Check if all users have submitted answers
+      const answeredUsers = Object.keys(roomTextAnswers).length;
+      const totalUsers = localRoomUsers?.length || 0;
+      
+      if (answeredUsers >= totalUsers && totalUsers > 0) {
+        setAllAnswersSubmitted(true);
+      }
+    }
+  }, [roomTextAnswers, user?.id, localRoomUsers]);
+
+  // Handle socket events for all answers submitted
+  useEffect(() => {
+    if (!socket) return;
+    
+    const handleAllAnswersSubmitted = (data: any) => {
+      if (data.questionIndex === currentQuestion) {
+        setAllAnswersSubmitted(true);
+        
+        // Calculate scores based on text answers if in text mode
+        if (room?.questions[currentQuestion]?.type === "text") {
+          const scores: {[key: string]: number} = {};
+          const correctAnswer = room.questions[currentQuestion].textAnswer?.toLowerCase().trim();
+          
+          Object.entries(data.answers).forEach(([userId, answer]) => {
+            const userAnswer = String(answer).toLowerCase().trim();
+            scores[userId] = userAnswer === correctAnswer ? 1 : 0;
+          });
+          
+          setAnswerScores(scores);
+        }
+      }
+    };
+    
+    const handleQuestionSkipped = (data: any) => {
+      if (data.questionIndex === currentQuestion) {
+        setAllAnswersSubmitted(true);
+        setAnswerScores({});
+      }
+    };
+    
+    socket.on('all_answers_submitted', handleAllAnswersSubmitted);
+    socket.on('question_skipped', handleQuestionSkipped);
+    
+    return () => {
+      socket.off('all_answers_submitted', handleAllAnswersSubmitted);
+      socket.off('question_skipped', handleQuestionSkipped);
+    };
+  }, [socket, currentQuestion, room]);
+
+  // Handle text answer submission
+  const handleSubmitTextAnswer = () => {
+    if (!myTextAnswer || hasSubmittedAnswer) return;
+    
+    submitTextAnswer(myTextAnswer, currentQuestion);
+    setHasSubmittedAnswer(true);
+  };
+
+  // Handle skipping the current question (owner only)
+  const handleSkipQuestion = () => {
+    if (!isOwner) return;
+    skipQuestion();
+  };
+
+  // Reset state when moving to the next question
+  const goToNextQuestion = () => {
+    if (room && currentQuestion < room.questions.length - 1) {
+      setCurrentQuestion(currentQuestion + 1);
+      setMyTextAnswer("");
+      setHasSubmittedAnswer(false);
+      setAllAnswersSubmitted(false);
+      setAnswerScores({});
+    }
+  };
+  
   // Handle selecting an answer
   const handleSelectAnswer = (answerIndex: number) => {
     if (quizSubmitted) return;
@@ -129,13 +256,6 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
     // Emit answer event to socket
     const isCorrect = room?.questions[currentQuestion].correctAnswer === answerIndex;
     sendAnswerEvent(currentQuestion, isCorrect);
-  };
-  
-  // Navigate to the next question
-  const goToNextQuestion = () => {
-    if (room && currentQuestion < room.questions.length - 1) {
-      setCurrentQuestion(currentQuestion + 1);
-    }
   };
   
   // Navigate to the previous question
@@ -286,6 +406,12 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
     );
   }
   
+  // Check if current question is a text question
+  let isTextQuestion = false;
+  if (room && room.questions && room.questions[currentQuestion]) {
+    isTextQuestion = room.questions[currentQuestion].type === "text";
+  }
+  
   return (
     <div className="py-12 px-4">
       <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -293,11 +419,33 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
         <div className="md:col-span-1 order-2 md:order-1">
           {showTeamProgress && (
             <div className="sticky top-4">
-              <TeamRoomProgress 
-                roomId={roomId}
-                totalQuestions={room.questions.length}
-                roomProgress={roomProgress}
-              />
+              <div className="bg-white rounded-lg shadow p-4 mb-6">
+                <h3 className="text-lg font-semibold mb-3 flex items-center">
+                  <FaUserFriends className="mr-2 text-green-600" />
+                  Team Members ({localRoomUsers?.length || 0})
+                </h3>
+                <div className="space-y-2">
+                  {localRoomUsers?.map((member) => (
+                    <div key={member.id} className={`flex items-center justify-between p-2 rounded ${
+                      textAnswers && member.id in textAnswers ? 'text-gray-800' : 'text-gray-400'
+                    }`}>
+                      <div className="flex items-center">
+                        {member.id === roomOwner && (
+                          <FaCrown className="text-yellow-500 mr-2" title="Room Owner" />
+                        )}
+                        <span className="text-md font-medium">{member.username}</span>
+                      </div>
+                      {allAnswersSubmitted && answerScores[member.id] !== undefined && (
+                        <span className={`text-sm px-2 py-1 rounded ${
+                          answerScores[member.id] > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          +{answerScores[member.id]}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
               
               <button
                 onClick={() => setShowTeamProgress(false)}
@@ -347,8 +495,13 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
           {/* Question card */}
           {!quizSubmitted ? (
             <div className="bg-white rounded-xl shadow-md overflow-hidden mb-6">
-              {/* Question */}
+              {/* Subject and Question */}
               <div className="px-6 py-5 border-b border-gray-100">
+                {currentQuestionData.subject && (
+                  <div className="text-sm font-medium text-gray-500 mb-1">
+                    {currentQuestionData.subject}
+                  </div>
+                )}
                 <h2 className="text-xl font-medium text-gray-800">
                   {currentQuestionData.question}
                 </h2>
@@ -356,30 +509,94 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
               
               {/* Answer options */}
               <div className="px-6 py-4">
-                <div className="space-y-3">
-                  {currentQuestionData.options.map((option: string, index: number) => (
-                    <button
-                      key={index}
-                      onClick={() => handleSelectAnswer(index)}
-                      className={`w-full text-left py-3 px-4 rounded-lg transition border ${
-                        selectedAnswers[currentQuestion] === index
-                          ? 'bg-green-50 border-green-300 text-green-800'
-                          : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
-                      }`}
-                    >
-                      <div className="flex items-start">
-                        <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-3 ${
+                {!isTextQuestion ? (
+                  // Multiple choice question
+                  <div className="space-y-3">
+                    {currentQuestionData.options.map((option: string, index: number) => (
+                      <button
+                        key={index}
+                        onClick={() => handleSelectAnswer(index)}
+                        className={`w-full text-left py-3 px-4 rounded-lg transition border ${
                           selectedAnswers[currentQuestion] === index
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-gray-200 text-gray-600'
-                        }`}>
-                          {String.fromCharCode(65 + index)}
+                            ? 'bg-green-50 border-green-300 text-green-800'
+                            : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-start">
+                          <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-3 ${
+                            selectedAnswers[currentQuestion] === index
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-gray-200 text-gray-600'
+                          }`}>
+                            {String.fromCharCode(65 + index)}
+                          </div>
+                          <span>{option}</span>
                         </div>
-                        <span>{option}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  // Text answer question
+                  <div>
+                    {allAnswersSubmitted ? (
+                      // Display everyone's answers
+                      <div className="mt-2 space-y-4">
+                        <h3 className="text-md font-medium mb-2">Everyone's Answers:</h3>
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          {localRoomUsers?.map(member => (
+                            <div key={member.id} className="py-2 border-b last:border-b-0">
+                              <div className="flex justify-between items-center">
+                                <div className="flex items-center">
+                                  {member.id === roomOwner && (
+                                    <FaCrown className="text-yellow-500 mr-2" />
+                                  )}
+                                  <span className="font-medium">{member.username}</span>
+                                </div>
+                                <div className={`text-sm px-2 py-1 rounded ${
+                                  answerScores[member.id] > 0 
+                                    ? 'bg-green-100 text-green-700' 
+                                    : 'bg-red-100 text-red-700'
+                                }`}>
+                                  +{answerScores[member.id] || 0}
+                                </div>
+                              </div>
+                              <div className="mt-1 pl-5">
+                                <span className="text-gray-700">{textAnswers && member.id in textAnswers ? textAnswers[member.id] : "No answer provided"}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </button>
-                  ))}
-                </div>
+                    ) : (
+                      // Show text input for answering
+                      <div className="space-y-4">
+                        <div className="mb-2 text-sm text-gray-600">
+                          Enter your answer below:
+                        </div>
+                        <textarea
+                          value={myTextAnswer}
+                          onChange={(e) => setMyTextAnswer(e.target.value)}
+                          disabled={hasSubmittedAnswer}
+                          className={`w-full border border-gray-300 rounded-lg py-3 px-4 min-h-[100px] focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent ${
+                            hasSubmittedAnswer ? 'bg-gray-100 text-gray-500' : ''
+                          }`}
+                          placeholder="Type your answer here..."
+                        />
+                        <button
+                          onClick={handleSubmitTextAnswer}
+                          disabled={!myTextAnswer || hasSubmittedAnswer}
+                          className={`w-full py-3 px-4 rounded-lg font-medium ${
+                            !myTextAnswer || hasSubmittedAnswer
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              : 'bg-green-600 text-white hover:bg-green-700'
+                          }`}
+                        >
+                          {hasSubmittedAnswer ? 'Answer Submitted' : 'Submit Answer'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               
               {/* Navigation buttons */}
@@ -398,14 +615,23 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
                 </button>
                 
                 <div className="flex space-x-3">
+                  {isOwner && !allAnswersSubmitted && isTextQuestion && (
+                    <button
+                      onClick={handleSkipQuestion}
+                      className="bg-yellow-500 text-white px-5 py-2 rounded-lg font-medium hover:bg-yellow-600"
+                    >
+                      Skip Question
+                    </button>
+                  )}
+                  
                   {currentQuestion === room.questions.length - 1 && (
                     <button
                       onClick={handleSubmitQuiz}
-                      disabled={selectedAnswers.length < room.questions.length}
+                      disabled={isTextQuestion ? !allAnswersSubmitted : selectedAnswers.length < room.questions.length}
                       className={`px-5 py-2 rounded-lg font-medium ${
-                        selectedAnswers.length < room.questions.length
-                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                          : 'bg-green-600 text-white hover:bg-green-700'
+                        isTextQuestion 
+                          ? (!allAnswersSubmitted ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700')
+                          : (selectedAnswers.length < room.questions.length ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700')
                       }`}
                     >
                       Submit Quiz
@@ -415,7 +641,10 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
                   {currentQuestion < room.questions.length - 1 && (
                     <button
                       onClick={goToNextQuestion}
-                      className="bg-green-600 text-white px-5 py-2 rounded-lg font-medium hover:bg-green-700 flex items-center"
+                      disabled={isTextQuestion && !allAnswersSubmitted}
+                      className={`bg-green-600 text-white px-5 py-2 rounded-lg font-medium hover:bg-green-700 flex items-center ${
+                        isTextQuestion && !allAnswersSubmitted ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                     >
                       Next
                       <FaArrowRight className="ml-2" />
