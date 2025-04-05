@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Socket.io Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #log { height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-top: 10px; }
+        input, button { padding: 8px; margin-top: 10px; }
+        button { cursor: pointer; background: #4CAF50; color: white; border: none; }
+        .user { background: #f1f1f1; padding: 10px; margin: 5px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Socket.io Connection Test</h1>
+    
+    <div>
+        <label for="username">Username:</label>
+        <input type="text" id="username" value="TestUser">
+    </div>
+    
+    <div>
+        <label for="roomId">Room ID:</label>
+        <input type="text" id="roomId" placeholder="Enter room ID">
+    </div>
+    
+    <button id="connectBtn">Connect & Join Room</button>
+    <button id="disconnectBtn" disabled>Disconnect</button>
+    
+    <h2>Event Log</h2>
+    <div id="log"></div>
+    
+    <h2>Team Members</h2>
+    <div id="users"></div>
+    
+    <script>
+        let socket;
+        const log = document.getElementById('log');
+        const usersDiv = document.getElementById('users');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        
+        function addLog(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `<div><strong>${timestamp}</strong>: ${message}</div>`;
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function updateUsers(users) {
+            usersDiv.innerHTML = '';
+            users.forEach(user => {
+                usersDiv.innerHTML += `
+                    <div class="user">
+                        <strong>${user.username}</strong> (${user.id})
+                        <div>Joined: ${new Date(user.joinedAt).toLocaleTimeString()}</div>
+                    </div>
+                `;
+            });
+        }
+        
+        connectBtn.addEventListener('click', () => {
+            const username = document.getElementById('username').value;
+            const roomId = document.getElementById('roomId').value;
+            
+            if (!roomId) {
+                addLog('Please enter a room ID');
+                return;
+            }
+            
+            // Connect to Socket.io server
+            socket = io('http://localhost:3030');
+            
+            socket.on('connect', () => {
+                addLog(`Connected to Socket.io server with ID: ${socket.id}`);
+                
+                // Join the room
+                socket.emit('join_room', {
+                    roomId,
+                    user: {
+                        id: socket.id,
+                        username: username
+                    }
+                });
+                
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            });
+            
+            socket.on('connect_error', (error) => {
+                addLog(`Connection error: ${error.message}`);
+            });
+            
+            socket.on('room_users_updated', ({ users }) => {
+                addLog(`Room users updated: ${users.length} users in room`);
+                updateUsers(users);
+            });
+            
+            socket.on('room_progress_updated', ({ progress }) => {
+                addLog(`Room progress updated: ${JSON.stringify(progress)}`);
+            });
+            
+            socket.on('user_completed_quiz', ({ username, score, totalQuestions }) => {
+                addLog(`User ${username} completed quiz with score ${score}/${totalQuestions}`);
+            });
+            
+            socket.on('disconnect', () => {
+                addLog('Disconnected from Socket.io server');
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            });
+        });
+        
+        disconnectBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+                addLog('Manually disconnected');
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            }
+        });
+        
+        addLog('Page loaded. Click connect to join a room.');
+    </script>
+</body>
+</html> 

@@ -3,8 +3,29 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useSocketRoom } from "@/lib/socketClient";
 import Link from "next/link";
-import { FaStar, FaTrophy, FaArrowRight, FaArrowLeft, FaBug } from "react-icons/fa";
+import { FaStar, FaTrophy, FaArrowRight, FaArrowLeft, FaBug, FaCheck, FaTimes } from "react-icons/fa";
+import TeamRoomProgress from "@/components/TeamRoomProgress";
+
+// Define proper interfaces for your data types
+interface Question {
+  question: string;
+  options: string[];
+  correctAnswer: number;
+}
+
+interface Room {
+  roomId: string;
+  roomName: string;
+  questions: Question[];
+  isPrivate: boolean;
+  subject: string;
+  difficulty: string;
+  createdBy: string;
+  createdAt: Date;
+  users?: any[];
+}
 
 export default function ClientRoom({ params }: { params: { roomId: string } }) {
   // Make sure we get the roomId correctly from params
@@ -19,7 +40,7 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
     console.error('CRITICAL ERROR: No roomId provided to ClientRoom component');
   }
   
-  const [room, setRoom] = useState<any>(null);
+  const [room, setRoom] = useState<Room | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [currentQuestion, setCurrentQuestion] = useState(0);
@@ -27,9 +48,20 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
   const [score, setScore] = useState(0);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [showTeamProgress, setShowTeamProgress] = useState(true);
   
   const router = useRouter();
   const { user, loading: authLoading, updateUserScore } = useAuth();
+  
+  // Socket integration for team features
+  const { roomUsers, roomProgress, sendAnswerEvent, sendQuizCompletedEvent } = useSocketRoom(
+    roomId,
+    user ? {
+      id: user.id,
+      username: user.username,
+      avatar: user.avatar
+    } : null
+  );
   
   // Fetch room data
   useEffect(() => {
@@ -93,11 +125,15 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
     const newSelectedAnswers = [...selectedAnswers];
     newSelectedAnswers[currentQuestion] = answerIndex;
     setSelectedAnswers(newSelectedAnswers);
+    
+    // Emit answer event to socket
+    const isCorrect = room?.questions[currentQuestion].correctAnswer === answerIndex;
+    sendAnswerEvent(currentQuestion, isCorrect);
   };
   
   // Navigate to the next question
   const goToNextQuestion = () => {
-    if (currentQuestion < room.questions.length - 1) {
+    if (room && currentQuestion < room.questions.length - 1) {
       setCurrentQuestion(currentQuestion + 1);
     }
   };
@@ -111,6 +147,8 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
   
   // Submit the quiz
   const handleSubmitQuiz = async () => {
+    if (!room) return;
+    
     let newScore = 0;
     
     // Calculate score
@@ -122,6 +160,9 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
     
     setScore(newScore);
     setQuizSubmitted(true);
+    
+    // Emit quiz completed event
+    sendQuizCompletedEvent(newScore, room.questions.length);
     
     // Update user score in database
     try {
@@ -246,189 +287,246 @@ export default function ClientRoom({ params }: { params: { roomId: string } }) {
   }
   
   return (
-    <div className="py-12 px-4 max-w-3xl mx-auto">
-      <div className="relative mb-8">
-        <div className="absolute -top-6 left-0 right-0 h-2 bg-gradient-to-r from-yellow-400 via-green-400 to-yellow-400 rounded-full animate-pulse"></div>
-        <h1 className="text-3xl font-bold mb-2 text-center text-yellow-500">✨ {room.roomName} ✨</h1>
-        <div className="flex justify-end mb-2">
-          <button 
-            onClick={() => setShowDebug(!showDebug)}
-            className="bg-gray-200 text-gray-700 px-2 py-1 rounded-md text-xs flex items-center"
-          >
-            <FaBug className="mr-1" /> {showDebug ? 'Hide' : 'Show'} Debug
-          </button>
+    <div className="py-12 px-4">
+      <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Team progress (left column on desktop) */}
+        <div className="md:col-span-1 order-2 md:order-1">
+          {showTeamProgress && (
+            <div className="sticky top-4">
+              <TeamRoomProgress 
+                roomId={roomId}
+                totalQuestions={room.questions.length}
+                roomProgress={roomProgress}
+              />
+              
+              <button
+                onClick={() => setShowTeamProgress(false)}
+                className="text-gray-500 text-sm hover:text-gray-700 w-full text-center mt-2"
+              >
+                Hide Team View
+              </button>
+            </div>
+          )}
+          
+          {!showTeamProgress && (
+            <button
+              onClick={() => setShowTeamProgress(true)}
+              className="bg-green-100 text-green-700 py-2 px-4 rounded-lg w-full"
+            >
+              Show Team Progress
+            </button>
+          )}
         </div>
-        {showDebug && (
-          <div className="bg-gray-50 p-2 rounded-lg border border-gray-200 text-xs mb-4">
-            <div>Room ID: {room.roomId}</div>
-            <div>Subject: {room.subject}</div>
-            <div>Difficulty: {room.difficulty}</div>
-            <div>Question Count: {room.questions.length}</div>
-          </div>
-        )}
-        <p className="text-lg text-gray-600 mb-4 text-center">
-          <span className="inline-block px-2 py-1 bg-green-100 text-green-800 rounded-md mr-2">
-            {room.subject || "General Knowledge"}
-          </span>
-          <span className="inline-block px-2 py-1 bg-yellow-100 text-yellow-800 rounded-md">
-            {(room.difficulty || "mixed").charAt(0).toUpperCase() + (room.difficulty || "mixed").slice(1)} Mode
-          </span>
-        </p>
-      </div>
       
-      {quizSubmitted ? (
-        // Results screen
-        <div className="bg-white rounded-xl shadow-lg p-8 border-2 border-yellow-300 relative">
-          <div className="absolute -right-4 -top-4 bg-yellow-400 text-white px-4 py-1 rotate-12 shadow-md font-bold">
-            QUEST COMPLETE!
-          </div>
-          
-          <div className="text-center mb-8">
-            <div className="text-6xl mb-4">🏆</div>
-            <h2 className="text-2xl font-bold text-yellow-500 mb-2">Quest Complete!</h2>
-            <p className="text-lg text-gray-700 mb-4">
-              You scored <span className="font-bold text-yellow-500">{score}</span> out of <span className="font-bold">{room.questions.length}</span>
-            </p>
-            <div className="mb-4">
-              <div className="inline-block px-3 py-1 bg-yellow-100 text-yellow-800 rounded-md font-medium">
-                +{score * 20} XP earned!
+        {/* Main quiz content (right column) */}
+        <div className="md:col-span-2 order-1 md:order-2">
+          <div className="relative mb-8">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-gray-800">
+                {room.roomName}
+              </h1>
+              <div className="bg-gray-100 px-3 py-1 rounded text-sm">
+                {room.subject} • {room.difficulty}
               </div>
             </div>
-          </div>
-          
-          <div className="bg-yellow-50 rounded-lg p-4 mb-6">
-            <h3 className="font-bold text-yellow-700 mb-2">Your Results</h3>
             
-            {room.questions.map((question: any, index: number) => (
-              <div key={index} className="mb-2 border-b border-yellow-100 pb-2 last:border-0">
-                <div className="flex items-center">
-                  {selectedAnswers[index] === question.correctAnswer ? (
-                    <span className="inline-block bg-green-100 text-green-800 rounded-full w-6 h-6 flex items-center justify-center mr-2">✓</span>
-                  ) : (
-                    <span className="inline-block bg-red-100 text-red-800 rounded-full w-6 h-6 flex items-center justify-center mr-2">✗</span>
-                  )}
-                  <span className="font-medium">Question {index + 1}</span>
-                </div>
-                {selectedAnswers[index] !== question.correctAnswer && (
-                  <div className="ml-8 mt-1 text-sm">
-                    <div className="text-red-600">
-                      Your answer: {question.options[selectedAnswers[index]]}
-                    </div>
-                    <div className="text-green-600">
-                      Correct answer: {question.options[question.correctAnswer]}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-          
-          <div className="flex justify-between">
-            <Link 
-              href="/play" 
-              className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-full transition-all transform hover:scale-105 shadow-md flex items-center"
-            >
-              Start New Quest
-            </Link>
-            
-            <button
-              onClick={() => {
-                setQuizSubmitted(false);
-                setCurrentQuestion(0);
-              }}
-              className="bg-yellow-400 hover:bg-yellow-500 text-white font-bold py-2 px-6 rounded-full transition-all transform hover:scale-105 shadow-md flex items-center"
-            >
-              Review Answers
-            </button>
-          </div>
-        </div>
-      ) : (
-        // Quiz screen
-        <div className="bg-white rounded-xl shadow-lg p-8 border-2 border-yellow-300 relative">
-          <div className="absolute -right-4 -top-4 bg-yellow-400 text-white px-4 py-1 rotate-12 shadow-md font-bold">
-            QUESTION {currentQuestion + 1}
-          </div>
-          
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex space-x-1">
-                {Array.from({ length: room.questions.length }).map((_, i) => (
+            <div className="mt-2 flex items-center text-gray-600 text-sm">
+              <span>Question {currentQuestion + 1} of {room.questions.length}</span>
+              <div className="ml-auto flex items-center">
+                <span className="mr-2">{selectedAnswers.filter((_, i) => i !== currentQuestion).length} answered</span>
+                <div className="w-24 h-2 bg-gray-200 rounded overflow-hidden">
                   <div 
-                    key={i}
-                    className={`w-3 h-3 rounded-full ${
-                      i === currentQuestion 
-                        ? 'bg-yellow-500' 
-                        : selectedAnswers[i] !== undefined 
-                          ? 'bg-green-500' 
-                          : 'bg-gray-300'
-                    }`}
+                    className="h-full bg-green-500" 
+                    style={{ width: `${(selectedAnswers.filter(a => a !== undefined).length / room.questions.length) * 100}%` }}
                   ></div>
-                ))}
-              </div>
-              <div className="text-sm text-gray-500">
-                Question {currentQuestion + 1} of {room.questions.length}
-              </div>
-            </div>
-            
-            <h2 className="text-xl font-bold text-gray-800 mb-6">
-              {currentQuestionData.question}
-            </h2>
-            
-            <div className="space-y-3 mb-6">
-              {currentQuestionData.options.map((option: string, index: number) => (
-                <div
-                  key={index}
-                  className={`p-3 rounded-lg border ${
-                    selectedAnswers[currentQuestion] === index
-                      ? 'border-yellow-500 bg-yellow-50 ring-2 ring-yellow-300'
-                      : 'border-gray-200 hover:border-yellow-300'
-                  } cursor-pointer transition-all`}
-                  onClick={() => handleSelectAnswer(index)}
-                >
-                  <div className="flex items-center">
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center mr-3 ${
-                      selectedAnswers[currentQuestion] === index
-                        ? 'bg-yellow-500 text-white'
-                        : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      {String.fromCharCode(65 + index)}
-                    </div>
-                    <div>{option}</div>
-                  </div>
                 </div>
-              ))}
+              </div>
             </div>
           </div>
           
-          <div className="flex justify-between">
-            <button
-              onClick={goToPrevQuestion}
-              disabled={currentQuestion === 0}
-              className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FaArrowLeft className="mr-2" /> Previous
-            </button>
-            
-            {currentQuestion < room.questions.length - 1 ? (
-              <button
-                onClick={goToNextQuestion}
-                disabled={selectedAnswers[currentQuestion] === undefined}
-                className="bg-yellow-400 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next <FaArrowRight className="ml-2" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSubmitQuiz}
-                disabled={selectedAnswers.length !== room.questions.length || selectedAnswers.some(answer => answer === undefined)}
-                className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Submit Quiz <FaTrophy className="ml-2" />
-              </button>
-            )}
-          </div>
+          {/* Question card */}
+          {!quizSubmitted ? (
+            <div className="bg-white rounded-xl shadow-md overflow-hidden mb-6">
+              {/* Question */}
+              <div className="px-6 py-5 border-b border-gray-100">
+                <h2 className="text-xl font-medium text-gray-800">
+                  {currentQuestionData.question}
+                </h2>
+              </div>
+              
+              {/* Answer options */}
+              <div className="px-6 py-4">
+                <div className="space-y-3">
+                  {currentQuestionData.options.map((option: string, index: number) => (
+                    <button
+                      key={index}
+                      onClick={() => handleSelectAnswer(index)}
+                      className={`w-full text-left py-3 px-4 rounded-lg transition border ${
+                        selectedAnswers[currentQuestion] === index
+                          ? 'bg-green-50 border-green-300 text-green-800'
+                          : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-start">
+                        <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-3 ${
+                          selectedAnswers[currentQuestion] === index
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-gray-200 text-gray-600'
+                        }`}>
+                          {String.fromCharCode(65 + index)}
+                        </div>
+                        <span>{option}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Navigation buttons */}
+              <div className="px-6 py-4 bg-gray-50 flex justify-between">
+                <button
+                  onClick={goToPrevQuestion}
+                  disabled={currentQuestion === 0}
+                  className={`px-4 py-2 rounded-lg flex items-center ${
+                    currentQuestion === 0
+                      ? 'text-gray-400 cursor-not-allowed'
+                      : 'text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <FaArrowLeft className="mr-2" />
+                  Previous
+                </button>
+                
+                <div className="flex space-x-3">
+                  {currentQuestion === room.questions.length - 1 && (
+                    <button
+                      onClick={handleSubmitQuiz}
+                      disabled={selectedAnswers.length < room.questions.length}
+                      className={`px-5 py-2 rounded-lg font-medium ${
+                        selectedAnswers.length < room.questions.length
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-green-600 text-white hover:bg-green-700'
+                      }`}
+                    >
+                      Submit Quiz
+                    </button>
+                  )}
+                  
+                  {currentQuestion < room.questions.length - 1 && (
+                    <button
+                      onClick={goToNextQuestion}
+                      className="bg-green-600 text-white px-5 py-2 rounded-lg font-medium hover:bg-green-700 flex items-center"
+                    >
+                      Next
+                      <FaArrowRight className="ml-2" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Results screen */
+            <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <div className="px-8 py-6 border-b border-gray-100">
+                <div className="flex items-center">
+                  <FaTrophy className="text-yellow-500 text-3xl mr-4" />
+                  <div>
+                    <h2 className="text-2xl font-bold text-gray-800">
+                      Quiz Completed!
+                    </h2>
+                    <p className="text-gray-600 mt-1">
+                      You scored {score} out of {room.questions.length} questions correctly.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="px-8 py-6">
+                <h3 className="text-lg font-medium mb-4">Question Review</h3>
+                
+                <div className="space-y-6">
+                  {room.questions.map((question: Question, qIndex: number) => {
+                    const userAnswer = selectedAnswers[qIndex];
+                    const isCorrect = userAnswer === question.correctAnswer;
+                    
+                    return (
+                      <div 
+                        key={qIndex} 
+                        className={`p-4 rounded-lg ${
+                          isCorrect ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+                        }`}
+                      >
+                        <div className="flex items-start">
+                          <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-3 ${
+                            isCorrect ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+                          }`}>
+                            {isCorrect ? <FaCheck /> : <FaTimes />}
+                          </div>
+                          
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-800">
+                              {qIndex + 1}. {question.question}
+                            </h4>
+                            
+                            <div className="mt-3 space-y-2">
+                              {question.options.map((option: string, oIndex: number) => (
+                                <div 
+                                  key={oIndex}
+                                  className={`py-2 px-3 rounded ${
+                                    oIndex === question.correctAnswer
+                                      ? 'bg-green-100 text-green-800'
+                                      : oIndex === userAnswer && oIndex !== question.correctAnswer
+                                        ? 'bg-red-100 text-red-800'
+                                        : 'bg-gray-50 text-gray-800'
+                                  }`}
+                                >
+                                  <div className="flex items-start">
+                                    <div className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center mr-2 text-xs ${
+                                      oIndex === question.correctAnswer
+                                        ? 'bg-green-500 text-white'
+                                        : oIndex === userAnswer && oIndex !== question.correctAnswer
+                                          ? 'bg-red-500 text-white'
+                                          : 'bg-gray-300 text-gray-700'
+                                    }`}>
+                                      {String.fromCharCode(65 + oIndex)}
+                                    </div>
+                                    <span>{option}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              
+              <div className="px-8 py-6 bg-gray-50 flex justify-between">
+                <Link
+                  href="/play"
+                  className="text-gray-600 hover:text-gray-800 font-medium"
+                >
+                  Return to Play Page
+                </Link>
+                
+                <button
+                  onClick={() => {
+                    setQuizSubmitted(false);
+                    setSelectedAnswers([]);
+                    setCurrentQuestion(0);
+                    setScore(0);
+                  }}
+                  className="bg-green-600 text-white px-5 py-2 rounded-lg font-medium hover:bg-green-700"
+                >
+                  Try Again
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 } 

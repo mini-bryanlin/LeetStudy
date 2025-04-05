@@ -3,23 +3,31 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
+    "socket": "node socket-server.js",
+    "dev:all": "concurrently \"npm run dev\" \"npm run socket\"",
+    "server": "node server.js",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_ENV=production concurrently \"next start\" \"npm run socket\"",
     "lint": "next lint"
   },
   "dependencies": {
     "@huggingface/inference": "^3.6.2",
     "bcryptjs": "^3.0.2",
+    "canvas": "^3.1.0",
+    "concurrently": "^8.2.2",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.15.0",
     "mongoose": "^8.13.2",
     "next": "15.2.4",
-    "pdf-parse": "^1.1.1",
+    "openai": "^4.91.1",
     "pdfjs-dist": "^2.16.105",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-icons": "^5.5.0"
+    "react-icons": "^5.5.0",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
