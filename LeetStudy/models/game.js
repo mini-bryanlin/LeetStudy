@@ -1,7 +1,7 @@
 const {v4: uuidv4} = require('uuid');
-
+const { createPlayer, getPlayerById, addPoints } = require('./player'); // Import the player model
 const games = [];
-const generateQuestions = (topic, difficulty) => {
+const generateQuestions = (topic, difficulty,number) => {
     const baseQuestions = [
       { question: 'What is the capital of France?', correctAnswer: 'Paris' },
       { question: 'Who wrote "Hamlet"?', correctAnswer: 'Shakespeare' },
@@ -11,16 +11,18 @@ const generateQuestions = (topic, difficulty) => {
     // Ask how to modify with Open AI API
     return baseQuestions;
   };
-const createGame = (topic, difficulty) =>{
+const createGame = (topic, difficulty,username) =>{
     const game = {
         id: uuidv4(),
         topic,
         difficulty,
         players: [],
         currentQuestionIndex: 0,
-        questions: generateQuestions(topic,difficulty),
+        questions: generateQuestions(topic,difficulty,number),
         answers:[],
     };
+    const player = createPlayer(username,true);
+    game.players.push(player.id);
     games.push(game);
     return game;
 };
@@ -28,6 +30,7 @@ const createGame = (topic, difficulty) =>{
 
   const addPlayerToGame = (gameId, playerId) =>{
     const game = getGame(gameId);
+    const player = getPlayerById(playerId);
     if (game && !game.players.includes(playerId)){
         game.players.push(playerId);
         return 'Player Added'
@@ -52,6 +55,7 @@ const createGame = (topic, difficulty) =>{
   };
 const submitAnswer = (gameId, playerId, answer, timeTaken) => {
     const game = getGame(gameId);
+    const player = getPlayerById(playerId)
     if (game){
         question = game.questions[game.currentQuestionIndex];
         const isCorrect = question.correctAnswer.toLowerCase() === answer.toLowerCase();
@@ -61,8 +65,12 @@ const submitAnswer = (gameId, playerId, answer, timeTaken) => {
             timeTaken,
             correct: isCorrect,
         });
+        if (isCorrect){
+            player.addPoints(10);
+        }
 
     }
+    i
 }
 const nextQuestion = (gameId) =>{
     const game = getGame(gameId);

@@ -2,13 +2,16 @@ const {v4: uuidv4} = require('uuid');
 
 const players = [];
 
-const createPlayer = (username) => {
+const createPlayer = (username,ownership) => {
     const player= {
         id:uuidv4(),
         username,
         gameId: null,
         points:0,
         answers: null,
+        history:[],
+        ownership
+        
 
     };
     players.push(player);
@@ -24,17 +27,26 @@ const setPlayerGame = (playerId,gameId) =>{
         player.gameId = gameId;
         }
 };
-const submitPlayerAnswer = (playerId, answer, timeTaken) => {
+const addPoints = (playerId,points) =>{
     const player = getPlayerById(playerId);
-    if (player) {
-        player.answer = answer;
-        timeTaken;
-      }
-    };
-    module.exports = {
+    if (player){
+        player.points += points;
+    }
+
+};
+const addHistory = (playerId,gameId) =>{
+    const player = getPlayerById(playerId);
+    if (player){
+        player.history.push(gameId);
+    }
+
+};
+module.exports = {
         createPlayer,
         getPlayerById,
         setPlayerGame,
         submitPlayerAnswer,
         nextQuestion,
+        addHistory,
+        addPoints
       };
