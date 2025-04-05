@@ -1,5 +1,5 @@
 const openai = require('openai');
-openai.apiKey = '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';
+
 
 
 // Create an OpenAI instance
