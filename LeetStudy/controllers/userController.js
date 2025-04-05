@@ -1,29 +1,40 @@
-const { createUser, getUser } = require('../models/user');
+const { createPlayer, getPlayerById, addPoints, addHistory } = require('../models/player');
 
-// Controller for creating a new user
-const createUserProfile = (req, res) => {
-  const { username, } = req.body;
-
-  // Create the user profile
-  const user = createUser(username);
-
-  // Return a success response with the user details
-  res.status(201).json({ message: 'User created', user });
+// Create a new player
+const createNewPlayer = (req, res) => {
+    const { username, ownership = false } = req.body;
+    const player = createPlayer(username, ownership);
+    res.status(201).json(player);
 };
 
-// Controller for getting a user profile by ID
-const getUserProfile = (req, res) => {
-  const { userId } = req.params;
-
-  // Get the user by ID
-  const user = getUser(userId);
-
-  // If the user exists, return their profile, otherwise return an error
-  if (user) {
-    res.status(200).json({ user });
-  } else {
-    res.status(404).json({ message: 'User not found' });
-  }
+// Get a player by their ID
+const getPlayer = (req, res) => {
+    const { playerId } = req.params;
+    const player = getPlayerById(playerId);
+    if (player) {
+        res.status(200).json(player);
+    } else {
+        res.status(404).json({ message: 'Player not found' });
+    }
 };
 
-module.exports = { createUserProfile, getUserProfile };
+// Add points to a player
+const updatePlayerPoints = (req, res) => {
+    const { playerId, points } = req.body;
+    addPoints(playerId, points);
+    res.status(200).json({ message: 'Points updated successfully' });
+};
+
+// Add game history for a player
+const updatePlayerHistory = (req, res) => {
+    const { playerId, gameId } = req.body;
+    addHistory(playerId, gameId);
+    res.status(200).json({ message: 'Game history updated successfully' });
+};
+
+module.exports = {
+    createNewPlayer,
+    getPlayer,
+    updatePlayerPoints,
+    updatePlayerHistory
+};

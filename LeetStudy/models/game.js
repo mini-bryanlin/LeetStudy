@@ -21,8 +21,8 @@ const createGame = (topic, difficulty,username) =>{
         questions: generateQuestions(topic,difficulty),
         answers:[],
     };
-    const player = createPlayer(username,true);
-    game.players.push(player.id);
+    // const player = createPlayer(username,true);
+    // game.players.push(player.id);
     games.push(game);
     return game;
 };
@@ -66,11 +66,16 @@ const submitAnswer = (gameId, playerId, answer, timeTaken) => {
             timeTaken,
             correct: isCorrect,
         });
-        // if (isCorrect){
-        //     player.addPoints(10);
-        // }
-        if (game.answers.lenth === game.players.length){
-            nextQuestion(gameId);
+        player.answers.push(answer)
+        if (isCorrect){
+          console.log('correct')
+            addPoints(playerId,10);
+        }else{
+          console.log('kill yourself')
+        }
+        if (game.answers.length === game.players.length){
+            game.currentQuestionIndex += 1;
+            game.answers = []
         }
        
 
