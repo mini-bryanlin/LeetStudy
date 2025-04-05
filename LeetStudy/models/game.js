@@ -1,7 +1,7 @@
 const {v4: uuidv4} = require('uuid');
 const { createPlayer, getPlayerById, addPoints } = require('./player'); // Import the player model
 const games = [];
-const generateQuestions = (topic, difficulty,number) => {
+const generateQuestions = (topic, difficulty) => {
     const baseQuestions = [
       { question: 'What is the capital of France?', correctAnswer: 'Paris' },
       { question: 'Who wrote "Hamlet"?', correctAnswer: 'Shakespeare' },
@@ -18,7 +18,7 @@ const createGame = (topic, difficulty,username) =>{
         difficulty,
         players: [],
         currentQuestionIndex: 0,
-        questions: generateQuestions(topic,difficulty,number),
+        questions: generateQuestions(topic,difficulty),
         answers:[],
     };
     const player = createPlayer(username,true);
@@ -66,18 +66,22 @@ const submitAnswer = (gameId, playerId, answer, timeTaken) => {
             timeTaken,
             correct: isCorrect,
         });
-        if (isCorrect){
-            player.addPoints(10);
+        // if (isCorrect){
+        //     player.addPoints(10);
+        // }
+        if (game.answers.lenth === game.players.length){
+            nextQuestion(gameId);
         }
+       
 
     }
-    i
-}
+    
+};
 const nextQuestion = (gameId) =>{
     const game = getGame(gameId);
-    if (game.answers.length % game.players.length === 0 ){
-        game.currentQuestionIndex += 1;
-    }    
+    
+    game.currentQuestionIndex += 1;
+      
 };
 
 module.exports = {

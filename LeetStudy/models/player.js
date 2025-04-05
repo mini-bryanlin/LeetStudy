@@ -10,7 +10,8 @@ const createPlayer = (username,ownership) => {
         points:0,
         answers: null,
         history:[],
-        ownership
+        ownership,
+        currentQuestion: null
         
 
     };
