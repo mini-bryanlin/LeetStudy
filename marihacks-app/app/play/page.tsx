@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/AuthContext";
 import { FaTrophy, FaGamepad, FaFire, FaStar, FaDragon, FaBrain, FaTrash, FaDoorOpen, FaUpload } from 'react-icons/fa';
 import { GiTakeMyMoney, GiSpellBook, GiUpgrade, GiMagicSwirl, GiScrollUnfurled, GiDoorway } from 'react-icons/gi';
 
@@ -12,6 +14,32 @@ export default function PlayPage() {
   const [roomNameError, setRoomNameError] = useState<string>('');
   const [questionCount, setQuestionCount] = useState<number>(10);
   const [isPrivateRoom, setIsPrivateRoom] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [selectedSubject, setSelectedSubject] = useState<string>('General');
+  const [difficulty, setDifficulty] = useState<string>('beginner');
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const router = useRouter();
+  const { user, loading } = useAuth();
+
+  // Check if user is authenticated
+  useEffect(() => {
+    if (!loading && !user) {
+      // Redirect to login page if not authenticated
+      router.push('/auth/login');
+    }
+  }, [user, loading, router]);
+
+  // If still loading or not authenticated, show nothing
+  if (loading || !user) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <div className="inline-block w-12 h-12 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="text-lg text-gray-600">Loading your adventure...</p>
+        </div>
+      </div>
+    );
+  }
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newFiles = e.target.files;
@@ -36,6 +64,102 @@ export default function PlayPage() {
     }
     
     setRoomName(value);
+  };
+
+  const handleSubmitRoom = async () => {
+    // Validate inputs
+    if (!roomName) {
+      setRoomNameError('Please enter a room name');
+      return;
+    }
+    
+    if (roomNameError) {
+      return; // Don't submit if there are validation errors
+    }
+    
+    if (uploadedFiles.length === 0) {
+      setErrorMessage('Please upload at least one file');
+      return;
+    }
+    
+    setIsSubmitting(true);
+    setErrorMessage('');
+    
+    try {
+      console.log('Creating new room:', roomName);
+      console.log('Selected subject:', selectedSubject);
+      
+      // Create form data
+      const formData = new FormData();
+      formData.append('roomName', roomName);
+      formData.append('isPrivate', isPrivateRoom.toString());
+      
+      // Make sure subject is valid and set a default if needed
+      const validSubject = selectedSubject || "General Knowledge";
+      formData.append('subject', validSubject);
+      
+      formData.append('difficulty', difficulty);
+      formData.append('questionCount', questionCount.toString());
+      formData.append('userId', user._id);
+      
+      // Add files
+      uploadedFiles.forEach(file => {
+        formData.append('files', file);
+        console.log('Adding file:', file.name, 'Size:', Math.round(file.size / 1024), 'KB');
+      });
+      
+      // Send to API
+      console.log('Submitting to /api/generate-questions');
+      console.log('Form data summary:', {
+        roomName, 
+        subject: validSubject,
+        difficulty,
+        isPrivate: isPrivateRoom,
+        questionCount,
+        fileCount: uploadedFiles.length
+      });
+      
+      const response = await fetch('/api/generate-questions', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        console.error('Failed to parse API response:', e);
+        throw new Error('Invalid API response format');
+      }
+      
+      console.log('API response:', data);
+      
+      if (!response.ok) {
+        throw new Error(data.error || `API error: ${response.status}`);
+      }
+      
+      console.log('Room creation successful. Room data:', data);
+      
+      // Redirect to the room page using the roomId
+      if (data.roomId) {
+        const roomUrl = `/${data.roomId}`;
+        console.log('Redirecting to room URL:', roomUrl);
+        
+        // Short delay to ensure state is updated
+        setTimeout(() => {
+          router.push(roomUrl);
+        }, 100);
+      } else {
+        console.error('No roomId in API response:', data);
+        throw new Error('Room created but ID not returned');
+      }
+      
+    } catch (error: any) {
+      console.error('Error submitting room:', error);
+      setErrorMessage(error.message || 'Failed to create room');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -147,15 +271,21 @@ export default function PlayPage() {
               </div>
               
               <div>
-                <label htmlFor="character-name-create" className="block text-sm font-medium text-gray-700 mb-1 flex items-center">
-                  <FaDragon className="text-yellow-500 mr-1" /> Choose Your Hero Name
-                </label>
-                <input 
-                  type="text" 
-                  id="character-name-create" 
-                  placeholder="Enter your hero name" 
-                  className="w-full rounded-lg border border-yellow-300 focus:ring-yellow-500 focus:border-yellow-500 py-2 px-3 mb-3"
-                />
+                <div className="mb-3">
+                  <div className="flex items-center">
+                    <FaDragon className="text-yellow-500 mr-1" />
+                    <span className="text-sm font-medium text-gray-700">Hero Name</span>
+                  </div>
+                  <div className="mt-1 p-2 bg-gray-50 rounded-lg border border-yellow-200">
+                    <div className="flex items-center">
+                      <div className="bg-yellow-100 text-yellow-800 w-7 h-7 rounded-full flex items-center justify-center mr-2">
+                        {user.username.charAt(0).toUpperCase()}
+                      </div>
+                      <span className="font-medium">{user.username}</span>
+                      <span className="ml-2 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded-full">Level {user.level}</span>
+                    </div>
+                  </div>
+                </div>
                 
                 <label htmlFor="room-name-create" className="block text-sm font-medium text-gray-700 mb-1 flex items-center">
                   <FaTrophy className="text-yellow-500 mr-1" /> Name Your Quest Room
@@ -243,13 +373,20 @@ export default function PlayPage() {
                 {name: "Psychology", icon: "🧠", color: "bg-indigo-100"},
                 {name: "Art", icon: "🎨", color: "bg-rose-100"},
               ].map((subject, i) => (
-                <div key={i} className={`flex items-center ${subject.color} p-2 rounded-lg border border-gray-200 hover:border-yellow-400 cursor-pointer transition-all hover:transform hover:scale-105`}>
+                <div 
+                  key={i} 
+                  className={`flex items-center ${subject.color} p-2 rounded-lg border ${selectedSubject === subject.name ? 'border-yellow-500 ring-2 ring-yellow-300' : 'border-gray-200'} hover:border-yellow-400 cursor-pointer transition-all hover:transform hover:scale-105`}
+                  onClick={() => setSelectedSubject(subject.name)}
+                >
                   <input
                     id={`subject-${i}`}
-                    type="checkbox"
-                    className="w-4 h-4 text-yellow-600 bg-gray-100 border-gray-300 rounded focus:ring-yellow-500"
+                    type="radio"
+                    name="subject"
+                    checked={selectedSubject === subject.name}
+                    onChange={() => setSelectedSubject(subject.name)}
+                    className="w-4 h-4 text-yellow-600 bg-gray-100 border-gray-300 rounded-full focus:ring-yellow-500"
                   />
-                  <label htmlFor={`subject-${i}`} className="ml-2 text-sm font-medium text-gray-700 flex items-center">
+                  <label htmlFor={`subject-${i}`} className="ml-2 text-sm font-medium text-gray-700 flex items-center cursor-pointer">
                     <span className="mr-1">{subject.icon}</span> {subject.name}
                   </label>
                 </div>
@@ -272,6 +409,8 @@ export default function PlayPage() {
                 <select 
                   id="difficulty" 
                   className="bg-gray-50 border-2 border-green-200 text-gray-900 text-sm rounded-lg focus:ring-yellow-500 focus:border-yellow-500 block w-full p-2.5"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value)}
                 >
                   <option value="beginner">Novice (Easy Mode)</option>
                   <option value="intermediate">Adept (Normal Mode)</option>
@@ -314,6 +453,12 @@ export default function PlayPage() {
               </div>
             </div>
           </div>
+          
+          {errorMessage && (
+            <div className="mb-4 p-3 bg-red-100 border-l-4 border-red-500 text-red-700 rounded">
+              <p>{errorMessage}</p>
+            </div>
+          )}
         </>
       ) : (
         // Join Existing Quest Tab
@@ -327,17 +472,22 @@ export default function PlayPage() {
           </h2>
           
           <div className="bg-white rounded-xl p-6 mb-6 shadow-md">
-            <div className="mb-4">
-              <label htmlFor="character-name-join" className="block text-sm font-medium text-gray-700 mb-1 flex items-center">
-                <FaDragon className="text-yellow-500 mr-1" /> Choose Your Hero Name
-              </label>
-              <input 
-                type="text" 
-                id="character-name-join" 
-                placeholder="Enter your hero name" 
-                className="w-full rounded-lg border border-green-300 focus:ring-yellow-500 focus:border-yellow-500 py-2 px-3"
-              />
-              <p className="text-xs text-gray-500 mt-1">This is how other players will know you (+15 XP for choosing a name)</p>
+            <div className="mb-6">
+              <div className="flex items-center mb-1">
+                <FaDragon className="text-yellow-500 mr-1" />
+                <span className="text-sm font-medium text-gray-700">Your Hero</span>
+              </div>
+              <div className="p-3 bg-green-50 rounded-lg border border-green-100">
+                <div className="flex items-center">
+                  <div className="bg-green-100 text-green-800 w-8 h-8 rounded-full flex items-center justify-center mr-2 font-medium">
+                    {user.username.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-medium">{user.username}</div>
+                    <div className="text-xs text-gray-500">Level {user.level} • {user.xp} XP</div>
+                  </div>
+                </div>
+              </div>
             </div>
             
             <div className="mb-6">
@@ -355,7 +505,7 @@ export default function PlayPage() {
                 />
                 <button 
                   className="bg-green-500 text-white px-4 py-2 rounded-r-lg hover:bg-green-600 transition-all transform hover:scale-105"
-                  onClick={() => alert("🎮 Joining quest room... +30 XP gained!")}
+                  onClick={() => {}}
                 >
                   JOIN
                 </button>
@@ -405,7 +555,7 @@ export default function PlayPage() {
                   </div>
                   <button 
                     className="bg-yellow-400 hover:bg-yellow-500 text-white text-sm px-3 py-1 rounded-full"
-                    onClick={() => alert(`🎮 Joining ${room.name}... +30 XP gained!`)}
+                    onClick={() => {}}
                   >
                     Join
                   </button>
@@ -420,11 +570,26 @@ export default function PlayPage() {
         <div className="absolute -top-6 left-0 right-0 flex justify-center">
           <div className="animate-bounce">👇</div>
         </div>
+        {errorMessage && (
+          <div className="mb-4 p-3 bg-red-100 border-l-4 border-red-500 text-red-700 rounded">
+            <p>{errorMessage}</p>
+          </div>
+        )}
         <button 
-          className="bg-yellow-400 hover:bg-yellow-500 text-white font-bold py-3 px-8 rounded-full transition-all transform hover:scale-105 shadow-lg mb-6 flex items-center mx-auto"
-          onClick={() => alert("⚔️ Your adventure begins! +100 XP gained!")}
+          className="bg-yellow-400 hover:bg-yellow-500 text-white font-bold py-3 px-8 rounded-full transition-all transform hover:scale-105 shadow-lg mb-6 flex items-center mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={handleSubmitRoom}
+          disabled={isSubmitting}
         >
-          <FaGamepad className="mr-2" /> BEGIN YOUR ADVENTURE!
+          {isSubmitting ? (
+            <>
+              <div className="animate-spin mr-3 h-5 w-5 border-2 border-white border-t-transparent rounded-full"></div>
+              CREATING QUEST...
+            </>
+          ) : (
+            <>
+              <FaGamepad className="mr-2" /> BEGIN YOUR ADVENTURE!
+            </>
+          )}
         </button>
         <div>
           <Link 
@@ -436,7 +601,7 @@ export default function PlayPage() {
         </div>
         
         <div className="mt-6 text-xs text-gray-400">
-          You're currently Level 1 Apprentice • 75/100 XP to next level • 3 achievements unlocked
+          You're currently Level {user.level} {user.username} • {user.xp}/100 XP to next level • {user.achievements?.length || 0} achievements unlocked
         </div>
       </div>
     </div>
