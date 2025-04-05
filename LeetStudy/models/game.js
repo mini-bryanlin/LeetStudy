@@ -1,6 +1,7 @@
 const {v4: uuidv4} = require('uuid');
 const { createPlayer, getPlayerById, addPoints } = require('./player'); // Import the player model
 const games = [];
+const openai = require('openai');
 const generateQuestions = (topic, difficulty) => {
     const baseQuestions = [
       { question: 'What is the capital of France?', correctAnswer: 'Paris' },

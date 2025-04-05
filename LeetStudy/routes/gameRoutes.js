@@ -1,11 +1,19 @@
 const express = require('express');
-const { roundHandler, answerQuestion, startGame } = require('../controllers/gameController');
 const router = express.Router();
+const gameController = require('../controllers/gameController');
 
-// Route to start a new game (start the game)
-router.post('/start', startGame);
+// Create a new game
+router.post('/create', gameController.createNewGame);
 
-// Route to submit an answer for a game
-// router.post('/:gameId/answer', answerQuestion);  // Fixed the typo here
+// Add a player to a game
+router.post('/add-player', gameController.addPlayer);
+
+// Get the current question for a game
+router.get('/:gameId/question', gameController.getQuestion);
+
+// Submit an answer for a player
+router.post('/submit-answer', gameController.submitPlayerAnswer);
+
+
 
 module.exports = router;

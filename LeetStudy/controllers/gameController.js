@@ -41,5 +41,4 @@ module.exports = {
     addPlayer,
     getQuestion,
     submitPlayerAnswer,
-    moveToNextQuestion
-};
+}
