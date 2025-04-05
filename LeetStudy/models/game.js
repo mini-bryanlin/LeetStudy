@@ -2,7 +2,7 @@ const {v4: uuidv4} = require('uuid');
 const { createPlayer, getPlayerById, addPoints } = require('./player'); // Import the player model
 const games = [];
 const openai = require('openai');
-
+console.log(openai)
 const evaluateAnswer = async (question, playerAnswer) => {
   try {
       const response = await openai.Completion.create({
