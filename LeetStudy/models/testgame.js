@@ -7,6 +7,7 @@ console.log('Game Created:', game);
 let players = []
 const player1 = createPlayer('player1',false)
 const player2= createPlayer('player2', false)
+
 // Step 2: Add players to the game
 players.push(player1)
 players.push(player2)

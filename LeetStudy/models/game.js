@@ -2,16 +2,59 @@ const {v4: uuidv4} = require('uuid');
 const { createPlayer, getPlayerById, addPoints } = require('./player'); // Import the player model
 const games = [];
 const openai = require('openai');
-const generateQuestions = (topic, difficulty) => {
-    const baseQuestions = [
-      { question: 'What is the capital of France?', correctAnswer: 'Paris' },
-      { question: 'Who wrote "Hamlet"?', correctAnswer: 'Shakespeare' },
-      { question: 'What is 2 + 2?', correctAnswer: '4' },
-    ];
-  
-    // Ask how to modify with Open AI API
-    return baseQuestions;
-  };
+openai.apiKey = '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';
+const evaluateAnswer = async (question, playerAnswer) => {
+  try {
+      const response = await openai.Completion.create({
+          engine: 'text-davinci-003',  // GPT-3 model
+          prompt: `Evaluate the following answer based on the question and score it from 0 to 100.\n\nQuestion: ${question}\nAnswer: ${playerAnswer}\nScore (0-100):`,
+          max_tokens: 10,
+          temperature: 0.0  // Set temperature to 0 for deterministic output
+      });
+
+
+      const scoreText = response.choices[0].text.trim();
+      console.log(scoreText)
+      const score = parseFloat(scoreText); // Convert the response to a float
+      if (isNaN(score)) {
+          throw new Error('Received invalid score from OpenAI');
+      }
+      return score;
+  } catch (error) {
+      console.error('Error evaluating answer:', error);
+      return 0;  // Fallback score in case of error
+  }
+};
+
+const generateQuestions = async (topic, difficulty) => {
+  try {
+      const response = await openai.Completion.create({
+          engine: 'text-davinci-003',  // GPT-3 model
+          prompt: `Generate 5 multiple-choice questions about ${topic} with a ${difficulty} level. Include 4 choices and the correct answer.`,
+          max_tokens: 200,
+          n: 1,
+          temperature: 0.7
+      });
+      setTimeout(() => {
+        console.log("3 seconds have passed!");
+    }, 10000); 
+
+      const questionsText = response.choices[0].text.trim();
+      const questions = questionsText.split('\n').map((questionText) => {
+          const [question, correctAnswer] = questionText.split(':');
+          return { question: question.trim(), correctAnswer: correctAnswer.trim() };
+      });
+
+      return questions;
+  } catch (error) {
+      console.error('Error generating questions:', error);
+      return [
+          { question: 'What is the capital of France?', correctAnswer: 'Paris' },
+          { question: 'Who wrote "Hamlet"?', correctAnswer: 'Shakespeare' },
+          { question: 'What is 2 + 2?', correctAnswer: '4' }
+      ];  // Default fallback questions in case of error
+  }
+};
 const createGame = (topic, difficulty,username) =>{
     const game = {
         id: uuidv4(),
@@ -67,13 +110,18 @@ const submitAnswer = (gameId, playerId, answer, timeTaken) => {
             timeTaken,
             correct: isCorrect,
         });
+        try{
+        const score =  evaluateAnswer(question, answer);
         player.answers.push(answer)
-        if (isCorrect){
-          console.log('correct')
-            addPoints(playerId,10);
-        }else{
-          console.log('kill yourself')
+        
+          console.log(score)
+            addPoints(playerId,score);
+        
+          
         }
+      catch(error){
+        console.log('shit fucked up')
+      }
         if (game.answers.length === game.players.length){
             game.currentQuestionIndex += 1;
             game.answers = []
@@ -82,14 +130,14 @@ const submitAnswer = (gameId, playerId, answer, timeTaken) => {
 
     }
     
-};
+
 const nextQuestion = (gameId) =>{
     const game = getGame(gameId);
     
     game.currentQuestionIndex += 1;
       
 };
-
+}
 module.exports = {
     createGame,
     addPlayerToGame,
@@ -97,5 +145,6 @@ module.exports = {
     getCurrentQuestion,
     generateQuestions,
     submitAnswer,
-    nextQuestion,
+  
 }
+
